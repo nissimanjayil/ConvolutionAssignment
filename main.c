@@ -472,10 +472,13 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
 // DEBUGGING(fprintf(stderr, "w=%d, h=%d, c=%d\n", w, h, c));
 
 // now compute multichannel, multikernel convolution
+// #pragma omp parallel for num_threads(8)
 #pragma omp parallel for
-  for (int w = 0; w < width; w++)
+  for (int h = 0; h < height; h++)
   {
-    for (int h = 0; h < height; h++)
+#pragma omp parallel for
+    // #pragma omp parallel for num_threads(8)
+    for (int w = 0; w < width; w++)
     {
       for (int x = 0; x < kernel_order; x++)
       {
@@ -559,37 +562,73 @@ int main(int argc, char **argv)
   output = new_empty_3d_matrix(nkernels, width, height);
 
   control_output = new_empty_3d_matrix(nkernels, width, height);
+  int team_time = 0;
 
   /* use a simple multichannel convolution routine to produce control result */
   multichannel_conv_dense(image, kernels, control_output, width,
                           height, nchannels, nkernels, kernel_order);
 
-  /* record starting time of team's code*/
-  gettimeofday(&start_time, NULL);
+  for (int i = 0; i < 20; i++)
+  {
 
-  if (nz_ratio > 1)
-  { // we're working on a sparse matrix
-    /* perform student team's sparse multichannel convolution */
-    team_conv_sparse(image, sparse_kernels, output, width,
-                     height, nchannels, nkernels, kernel_order);
-  }
-  else
-  { // we're working on a dense matrix
-    multichannel_conv_dense(image, kernels, output, width,
-                            height, nchannels, nkernels, kernel_order);
-  }
-  /* record finishing time */
-  gettimeofday(&stop_time, NULL);
+    /* record starting time of team's code*/
+    gettimeofday(&start_time, NULL);
 
-  mul_time = (stop_time.tv_sec - start_time.tv_sec) * 1000000L +
-             (stop_time.tv_usec - start_time.tv_usec);
-  printf("Team conv time: %lld microseconds\n", mul_time);
+    if (nz_ratio > 1)
+    { // we're working on a sparse matrix
+      /* perform student team's sparse multichannel convolution */
+      team_conv_sparse(image, sparse_kernels, output, width,
+                       height, nchannels, nkernels, kernel_order);
+    }
+    else
+    { // we're working on a dense matrix
+      multichannel_conv_dense(image, kernels, output, width,
+                              height, nchannels, nkernels, kernel_order);
+    }
+    /* record finishing time */
+    gettimeofday(&stop_time, NULL);
 
-  DEBUGGING(write_out(output, nkernels, width, height));
+    mul_time = (stop_time.tv_sec - start_time.tv_sec) * 1000000L +
+               (stop_time.tv_usec - start_time.tv_usec);
+    printf("Team conv time: %lld microseconds\n", mul_time);
+    team_time += mul_time;
 
-  /* now check that the team's multichannel convolution routine
+    DEBUGGING(write_out(output, nkernels, width, height));
+
+    /* now check that the team's multichannel convolution routine
      gives the same answer as the known working version */
-  check_result(output, control_output, nkernels, width, height);
+    check_result(output, control_output, nkernels, width, height);
+  }
+
+  int default_time = 0;
+  for (int i = 0; i < 20; i++)
+  {
+
+    /* record starting time of team's code*/
+    gettimeofday(&start_time, NULL);
+
+    if (nz_ratio > 1)
+    { // we're working on a sparse matrix
+      /* perform student team's sparse multichannel convolution */
+      multichannel_conv_sparse(image, sparse_kernels, output, width,
+                               height, nchannels, nkernels, kernel_order);
+    }
+    else
+    { // we're working on a dense matrix
+      multichannel_conv_dense(image, kernels, output, width,
+                              height, nchannels, nkernels, kernel_order);
+    }
+    /* record finishing time */
+    gettimeofday(&stop_time, NULL);
+
+    mul_time = (stop_time.tv_sec - start_time.tv_sec) * 1000000L +
+               (stop_time.tv_usec - start_time.tv_usec);
+    printf("Default conv time: %lld microseconds\n", mul_time);
+    default_time += mul_time;
+  }
+
+  double speedup = (double)default_time / (double)team_time;
+  printf("Speed up: %f\n", speedup);
 
   return 0;
 }
