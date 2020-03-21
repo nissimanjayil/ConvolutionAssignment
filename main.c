@@ -35,7 +35,7 @@
 #include <stdlib.h>
 #include <sys/time.h>
 #include <assert.h>
-// #include <omp.h>
+#include <omp.h>
 #include <math.h>
 #include <stdint.h>
 
@@ -453,8 +453,49 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
                       float ***output, int width, int height,
                       int nchannels, int nkernels, int kernel_order)
 {
-  multichannel_conv_sparse(image, kernels, output, width, height,
-                           nchannels, nkernels, kernel_order);
+  // int h, w, x, y, c, m, index;
+  // float value;
+
+  // initialize the output matrix to zero
+#pragma omp parallel for
+  for (int m = 0; m < nkernels; m++)
+  {
+    for (int h = 0; h < height; h++)
+    {
+      for (int w = 0; w < width; w++)
+      {
+        output[m][h][w] = 0.0;
+      }
+    }
+  }
+
+// DEBUGGING(fprintf(stderr, "w=%d, h=%d, c=%d\n", w, h, c));
+
+// now compute multichannel, multikernel convolution
+#pragma omp parallel for
+  for (int w = 0; w < width; w++)
+  {
+    for (int h = 0; h < height; h++)
+    {
+      for (int x = 0; x < kernel_order; x++)
+      {
+        for (int y = 0; y < kernel_order; y++)
+        {
+          struct sparse_matrix *kernel = kernels[x][y];
+          for (int m = 0; m < nkernels; m++)
+          {
+            for (int index = kernel->kernel_starts[m]; index < kernel->kernel_starts[m + 1]; index++)
+            {
+              int this_c = kernel->channel_numbers[index];
+              assert((this_c >= 0) && (this_c < nchannels));
+              float value = kernel->values[index];
+              output[m][h][w] += image[w + x][h + y][this_c] * value;
+            }
+          } // m
+        }   // y
+      }     // x
+    }       // h
+  }         // w
 }
 
 int main(int argc, char **argv)
