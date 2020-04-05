@@ -36,8 +36,10 @@
 #include <sys/time.h>
 #include <assert.h>
 #include <omp.h>
+#include <immintrin.h>
 #include <math.h>
 #include <stdint.h>
+#include <string.h>
 
 /* the following two definitions of DEBUGGING control whether or not
    debugging information is written out. To put the program into
@@ -446,6 +448,11 @@ void multichannel_conv_sparse(float ***image, struct sparse_matrix ***kernels,
       }     // x
     }       // h
   }         // w
+  // for (int i = 0; i < width; i++)
+  // {
+  //   printf("%f\t", output[0][0][i]);
+  // }
+  // printf("\n");
 }
 
 /* the fast version of sparse convolution written by the team */
@@ -453,10 +460,21 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
                       float ***output, int width, int height,
                       int nchannels, int nkernels, int kernel_order)
 {
-  // int h, w, x, y, c, m, index;
-  // float value;
+  float *tmp = malloc(sizeof(float) * nchannels * height * width);
 
-  // initialize the output matrix to zero
+#pragma omp parallel for
+  for (int c = 0; c < nchannels; c++)
+  {
+    for (int h = 0; h < height; h++)
+    {
+      for (int w = 0; w < width; w++)
+      {
+        tmp[(c * height * width) + (h * width) + w] = image[w][h][c];
+      }
+    }
+  }
+
+// initialize the output matrix to zero
 #pragma omp parallel for
   for (int m = 0; m < nkernels; m++)
   {
@@ -469,40 +487,91 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
     }
   }
 
-// DEBUGGING(fprintf(stderr, "w=%d, h=%d, c=%d\n", w, h, c));
+  // printf("here\n");
 
-// now compute multichannel, multikernel convolution
-// #pragma omp parallel for num_threads(8)
-#pragma omp parallel for
-  for (int h = 0; h < height; h++)
+  // now compute multichannel, multikernel convolution
+  // #pragma omp parallel for
+  for (int x = 0; x < kernel_order; x++)
   {
-#pragma omp parallel for
-    // #pragma omp parallel for num_threads(8)
-    for (int w = 0; w < width; w++)
+    for (int y = 0; y < kernel_order; y++)
     {
-      for (int x = 0; x < kernel_order; x++)
+
+      for (int k = 0; k < nkernels; k++)
       {
-        for (int y = 0; y < kernel_order; y++)
+        // printf("k1\n");
+
+        int length = kernels[x][y]->kernel_starts[k + 1] - kernels[x][y]->kernel_starts[k];
+        // printf("%d\n", length);
+        // if (length > 0)
         {
-          struct sparse_matrix *kernel = kernels[x][y];
-          for (int m = 0; m < nkernels; m++)
+          int start = kernels[x][y]->kernel_starts[k];
+          // printf("k\n");
+          for (int non_zero_index = 0; non_zero_index < length; non_zero_index++)
           {
-            for (int index = kernel->kernel_starts[m]; index < kernel->kernel_starts[m + 1]; index++)
+            // printf("nz1\n");
+
+            int channel = kernels[x][y]->channel_numbers[start + non_zero_index];
+            int value = kernels[x][y]->values[start + non_zero_index];
+            // printf("nz\n");
+
+            __m128 multiplier = _mm_set1_ps(value);
+
+            // #pragma omp parallel for
+            for (int h = 0; h < height; h++)
             {
-              int this_c = kernel->channel_numbers[index];
-              assert((this_c >= 0) && (this_c < nchannels));
-              float value = kernel->values[index];
-              output[m][h][w] += image[w + x][h + y][this_c] * value;
+              // for (int w = 0; w < width - 0; w += 1)
+              for (int w = 0; w < width - 3; w += 4)
+              {
+                // if (h == 0 && w == width - 1)
+                // {
+                //   printf("w: %d\t h: %d\t x: %d\t y: %d\n", w, h, x, y);
+                //   printf("w: %d\t h: %d\n", ((w + x) % width), (((h + y) % height)));
+                // }
+                // if (((channel * height * width)) + (((h + y)) * width) + ((w + x)) < nchannels * height * width)
+                // {
+                //   output[k][h][w] += tmp[((channel * height * width)) + ((h + y) * width) + ((w + x))] * value;
+                // }
+
+                // output[k][h][w] += tmp[((channel * height * width)) + (((h + y) % height) * width) + ((w + x) % width)] * value;
+                if (h + y >= height || w + 3 + x >= width)
+                {
+                  for (w = w; w < width; w++)
+                  {
+                    output[k][h][w] += image[w + x][h + y][channel] * value;
+                    // w -= 3;
+                  }
+                }
+                else
+                {
+                  // output[k][h][w] += tmp[((channel * height * width)) + (((h + y) % height) * width) + ((w + x) % width)] * value;
+
+                  __m128 image_vals = _mm_loadu_ps(&tmp[((channel * height * width)) + ((h + y) * width) + (w + x)]);
+
+                  __m128 out_vals = _mm_mul_ps(image_vals, multiplier);
+                  __m128 outputs = _mm_load_ps(&output[k][h][w]);
+                  outputs = _mm_add_ps(out_vals, outputs);
+                  _mm_store_ps(&output[k][h][w], outputs);
+                }
+              }
             }
-          } // m
-        }   // y
-      }     // x
-    }       // h
-  }         // w
+          }
+        }
+      }
+    }
+  }
+  // for (int i = 0; i < width; i++)
+  // {
+  //   printf("%f\t", output[0][0][i]);
+  // }
+  // printf("\n");
+
+  free(tmp);
 }
 
 int main(int argc, char **argv)
 {
+  // printf("here");
+
   //float image[W][H][C];
   //float kernels[M][C][K][K];
   //float output[M][W][H];
@@ -564,11 +633,13 @@ int main(int argc, char **argv)
   control_output = new_empty_3d_matrix(nkernels, width, height);
   int team_time = 0;
 
+  int runTimes = 1;
+
   /* use a simple multichannel convolution routine to produce control result */
   multichannel_conv_dense(image, kernels, control_output, width,
                           height, nchannels, nkernels, kernel_order);
 
-  for (int i = 0; i < 20; i++)
+  for (int i = 0; i < runTimes; i++)
   {
 
     /* record starting time of team's code*/
@@ -598,10 +669,11 @@ int main(int argc, char **argv)
     /* now check that the team's multichannel convolution routine
      gives the same answer as the known working version */
     check_result(output, control_output, nkernels, width, height);
+    output = new_empty_3d_matrix(nkernels, width, height);
   }
 
   int default_time = 0;
-  for (int i = 0; i < 20; i++)
+  for (int i = 0; i < runTimes; i++)
   {
 
     /* record starting time of team's code*/
@@ -625,6 +697,9 @@ int main(int argc, char **argv)
                (stop_time.tv_usec - start_time.tv_usec);
     printf("Default conv time: %lld microseconds\n", mul_time);
     default_time += mul_time;
+    check_result(output, control_output, nkernels, width, height);
+
+    output = new_empty_3d_matrix(nkernels, width, height);
   }
 
   double speedup = (double)default_time / (double)team_time;
