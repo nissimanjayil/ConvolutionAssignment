@@ -448,11 +448,6 @@ void multichannel_conv_sparse(float ***image, struct sparse_matrix ***kernels,
       }     // x
     }       // h
   }         // w
-  // for (int i = 0; i < width; i++)
-  // {
-  //   printf("%f\t", output[0][0][i]);
-  // }
-  // printf("\n");
 }
 
 /* the fast version of sparse convolution written by the team */
@@ -462,6 +457,7 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
 {
   float *tmp = malloc(sizeof(float) * nchannels * height * width);
 
+// Reformat image
 #pragma omp parallel for
   for (int c = 0; c < nchannels; c++)
   {
@@ -487,10 +483,7 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
     }
   }
 
-  // printf("here\n");
-
   // now compute multichannel, multikernel convolution
-  // #pragma omp parallel for
   for (int x = 0; x < kernel_order; x++)
   {
     for (int y = 0; y < kernel_order; y++)
@@ -498,53 +491,32 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
 
       for (int k = 0; k < nkernels; k++)
       {
-        // printf("k1\n");
 
         int length = kernels[x][y]->kernel_starts[k + 1] - kernels[x][y]->kernel_starts[k];
-        // printf("%d\n", length);
-        // if (length > 0)
         {
           int start = kernels[x][y]->kernel_starts[k];
-          // printf("k\n");
           for (int non_zero_index = 0; non_zero_index < length; non_zero_index++)
           {
-            // printf("nz1\n");
 
             int channel = kernels[x][y]->channel_numbers[start + non_zero_index];
             int value = kernels[x][y]->values[start + non_zero_index];
-            // printf("nz\n");
 
             __m128 multiplier = _mm_set1_ps(value);
 
-            // #pragma omp parallel for
+#pragma omp parallel for
             for (int h = 0; h < height; h++)
             {
-              // for (int w = 0; w < width - 0; w += 1)
               for (int w = 0; w < width - 3; w += 4)
               {
-                // if (h == 0 && w == width - 1)
-                // {
-                //   printf("w: %d\t h: %d\t x: %d\t y: %d\n", w, h, x, y);
-                //   printf("w: %d\t h: %d\n", ((w + x) % width), (((h + y) % height)));
-                // }
-                // if (((channel * height * width)) + (((h + y)) * width) + ((w + x)) < nchannels * height * width)
-                // {
-                //   output[k][h][w] += tmp[((channel * height * width)) + ((h + y) * width) + ((w + x))] * value;
-                // }
-
-                // output[k][h][w] += tmp[((channel * height * width)) + (((h + y) % height) * width) + ((w + x) % width)] * value;
                 if (h + y >= height || w + 3 + x >= width)
                 {
                   for (w = w; w < width; w++)
                   {
                     output[k][h][w] += image[w + x][h + y][channel] * value;
-                    // w -= 3;
                   }
                 }
                 else
                 {
-                  // output[k][h][w] += tmp[((channel * height * width)) + (((h + y) % height) * width) + ((w + x) % width)] * value;
-
                   __m128 image_vals = _mm_loadu_ps(&tmp[((channel * height * width)) + ((h + y) * width) + (w + x)]);
 
                   __m128 out_vals = _mm_mul_ps(image_vals, multiplier);
@@ -559,23 +531,12 @@ void team_conv_sparse(float ***image, struct sparse_matrix ***kernels,
       }
     }
   }
-  // for (int i = 0; i < width; i++)
-  // {
-  //   printf("%f\t", output[0][0][i]);
-  // }
-  // printf("\n");
 
   free(tmp);
 }
 
 int main(int argc, char **argv)
 {
-  // printf("here");
-
-  //float image[W][H][C];
-  //float kernels[M][C][K][K];
-  //float output[M][W][H];
-
   float ***image;
   float ****kernels;
   struct sparse_matrix ***sparse_kernels = NULL;
@@ -633,11 +594,13 @@ int main(int argc, char **argv)
   control_output = new_empty_3d_matrix(nkernels, width, height);
   int team_time = 0;
 
-  int runTimes = 1;
+  int runTimes = 3;
 
   /* use a simple multichannel convolution routine to produce control result */
   multichannel_conv_dense(image, kernels, control_output, width,
                           height, nchannels, nkernels, kernel_order);
+
+  int default_time = 0;
 
   for (int i = 0; i < runTimes; i++)
   {
@@ -670,11 +633,6 @@ int main(int argc, char **argv)
      gives the same answer as the known working version */
     check_result(output, control_output, nkernels, width, height);
     output = new_empty_3d_matrix(nkernels, width, height);
-  }
-
-  int default_time = 0;
-  for (int i = 0; i < runTimes; i++)
-  {
 
     /* record starting time of team's code*/
     gettimeofday(&start_time, NULL);
